@@ -1,23 +1,20 @@
 const express = require("express");
 const dotenv = require("dotenv");
-const sqlite3 = require("sqlite3").verbose();
+const Database = require("better-sqlite3");
 const cors = require("cors");
 
 dotenv.config();
 const app = express();
 
-app.use(cors()); 
+app.use(cors());
 app.use(express.json());
 
-// Connect to SQLite database (creates file if not exists)
-const db = new sqlite3.Database("treksafe.db", (err) => {
-  if (err) console.error("❌ DB connection error:", err.message);
-  else console.log("✅ Connected to SQLite database");
-});
+// ====================== DATABASE ======================
+const db = new Database("treksafe.db");
+console.log("✅ Connected to SQLite database");
 
-// ====================== TABLES ======================
-// Tourists
-db.run(`
+// Tables
+db.prepare(`
   CREATE TABLE IF NOT EXISTS tourists (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -27,10 +24,9 @@ db.run(`
     itinerary TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
-`);
+`).run();
 
-// Locations
-db.run(`
+db.prepare(`
   CREATE TABLE IF NOT EXISTS locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     touristId TEXT NOT NULL,
@@ -39,10 +35,9 @@ db.run(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (touristId) REFERENCES tourists(id)
   )
-`);
+`).run();
 
-// SOS Alerts
-db.run(`
+db.prepare(`
   CREATE TABLE IF NOT EXISTS sos_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     touristId TEXT NOT NULL,
@@ -51,108 +46,104 @@ db.run(`
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (touristId) REFERENCES tourists(id)
   )
-`);
+`).run();
 
 // ====================== ROUTES ======================
 
 // Test route
 app.get("/", (req, res) => {
-  res.send("🚀 Trek-Safe Backend (server.js + SQLite3) is running!");
+  res.send("🚀 Trek-Safe Backend (server.js + better-sqlite3) is running!");
 });
 
 // ---------- Tourist Registration ----------
 app.post("/tourists", (req, res) => {
-  const { name, age, idProof, emergencyContact, itinerary } = req.body;
-  const id = "TRS-" + Math.random().toString(36).substr(2, 9).toUpperCase();
+  try {
+    const { name, age, idProof, emergencyContact, itinerary } = req.body;
+    const id = "TRS-" + Math.random().toString(36).substr(2, 9).toUpperCase();
 
-  db.run(
-    "INSERT INTO tourists (id, name, age, idProof, emergencyContact, itinerary) VALUES (?, ?, ?, ?, ?, ?)",
-    [id, name, age, idProof, emergencyContact, itinerary],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id, name, age, idProof, emergencyContact, itinerary });
-    }
-  );
+    db.prepare(`
+      INSERT INTO tourists (id, name, age, idProof, emergencyContact, itinerary)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(id, name, age, idProof, emergencyContact, itinerary);
+
+    res.json({ id, name, age, idProof, emergencyContact, itinerary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Get all tourists ----------
 app.get("/tourists", (req, res) => {
-  db.all("SELECT * FROM tourists ORDER BY created_at DESC", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  try {
+    const rows = db.prepare("SELECT * FROM tourists ORDER BY created_at DESC").all();
     res.json(rows);
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// ---------- Get single tourist ----------
+// ---------- Get single tourist with locations + SOS ----------
 app.get("/tourists/:id", (req, res) => {
-  const touristId = req.params.id;
-  db.get("SELECT * FROM tourists WHERE id = ?", [touristId], (err, tourist) => {
-    if (err) return res.status(500).json({ error: err.message });
+  try {
+    const touristId = req.params.id;
+    const tourist = db.prepare("SELECT * FROM tourists WHERE id = ?").get(touristId);
+
     if (!tourist) return res.status(404).json({ error: "Tourist not found" });
 
-    // Get all locations
-    db.all("SELECT * FROM locations WHERE touristId = ? ORDER BY timestamp DESC", [touristId], (err, locations) => {
-      if (err) return res.status(500).json({ error: err.message });
+    const locations = db.prepare("SELECT * FROM locations WHERE touristId = ? ORDER BY timestamp DESC").all(touristId);
+    const sosAlerts = db.prepare("SELECT * FROM sos_alerts WHERE touristId = ? ORDER BY timestamp DESC").all(touristId);
 
-      // Get all SOS alerts
-      db.all("SELECT * FROM sos_alerts WHERE touristId = ? ORDER BY timestamp DESC", [touristId], (err, sosAlerts) => {
-        if (err) return res.status(500).json({ error: err.message });
-
-        res.json({
-          ...tourist,
-          locations,
-          sosAlerts
-        });
-      });
-    });
-  });
+    res.json({ ...tourist, locations, sosAlerts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Update location ----------
 app.post("/tourists/:id/location", (req, res) => {
-  const { lat, lng } = req.body;
-  db.run(
-    "INSERT INTO locations (touristId, lat, lng) VALUES (?, ?, ?)",
-    [req.params.id, lat, lng],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ touristId: req.params.id, lat, lng, timestamp: new Date() });
-    }
-  );
+  try {
+    const { lat, lng } = req.body;
+    db.prepare("INSERT INTO locations (touristId, lat, lng) VALUES (?, ?, ?)").run(req.params.id, lat, lng);
+
+    res.json({ touristId: req.params.id, lat, lng, timestamp: new Date() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- SOS Alert ----------
 app.post("/tourists/:id/sos", (req, res) => {
-  const { lat, lng } = req.body;
-  db.run(
-    "INSERT INTO sos_alerts (touristId, lat, lng) VALUES (?, ?, ?)",
-    [req.params.id, lat, lng],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ message: "🚨 SOS Alert Recorded", touristId: req.params.id, lat, lng });
-    }
-  );
+  try {
+    const { lat, lng } = req.body;
+    db.prepare("INSERT INTO sos_alerts (touristId, lat, lng) VALUES (?, ?, ?)").run(req.params.id, lat, lng);
+
+    res.json({ message: "🚨 SOS Alert Recorded", touristId: req.params.id, lat, lng });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// ---------- Police: get all tourists with latest location and SOS ----------
+// ---------- Police: get all tourists with latest location + SOS ----------
 app.get("/police/tourists", (req, res) => {
-  const query = `
-    SELECT t.id, t.name, t.age, t.idProof, t.emergencyContact, t.itinerary,
-      l.lat AS currentLat, l.lng AS currentLng,
-      s.timestamp AS lastSOS
-    FROM tourists t
-    LEFT JOIN locations l ON l.id = (
-      SELECT id FROM locations WHERE touristId = t.id ORDER BY timestamp DESC LIMIT 1
-    )
-    LEFT JOIN sos_alerts s ON s.id = (
-      SELECT id FROM sos_alerts WHERE touristId = t.id ORDER BY timestamp DESC LIMIT 1
-    )
-    ORDER BY t.created_at DESC
-  `;
-  db.all(query, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  try {
+    const query = `
+      SELECT t.id, t.name, t.age, t.idProof, t.emergencyContact, t.itinerary,
+        l.lat AS currentLat, l.lng AS currentLng,
+        s.timestamp AS lastSOS
+      FROM tourists t
+      LEFT JOIN locations l ON l.id = (
+        SELECT id FROM locations WHERE touristId = t.id ORDER BY timestamp DESC LIMIT 1
+      )
+      LEFT JOIN sos_alerts s ON s.id = (
+        SELECT id FROM sos_alerts WHERE touristId = t.id ORDER BY timestamp DESC LIMIT 1
+      )
+      ORDER BY t.created_at DESC
+    `;
+    const rows = db.prepare(query).all();
     res.json(rows);
-  });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ====================== SERVER LISTEN ======================
