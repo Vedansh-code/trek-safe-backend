@@ -123,6 +123,16 @@ app.post("/tourists/:id/sos", (req, res) => {
   }
 });
 
+// ---------- Get all SOS alerts ----------
+app.get("/sos_alerts", (req, res) => {
+  try {
+    const rows = db.prepare("SELECT * FROM sos_alerts ORDER BY timestamp DESC").all();
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Police: get all tourists with latest location + SOS ----------
 app.get("/police/tourists", (req, res) => {
   try {
